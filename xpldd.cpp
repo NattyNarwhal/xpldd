@@ -87,7 +87,7 @@ static bool handle_dynamic(Elf *e, Elf_Scn *scn, GElf_Shdr *shdr,
 	return true;
 }
 
-static void process_file(string& file, set<string>& s,
+static bool process_file(string& file, set<string>& s,
 	       	vector<string>& orig_rpath,
 	       	string& prefix, bool recurse)
 {
