@@ -1,0 +1,54 @@
+.Dd Sep 4, 2020
+.Dt XPLDD 1
+.Os
+.Sh NAME
+.Nm xpldd
+.Nd gather dynamically loaded binaries for an ELF binary
+.Sh SYNOPSIS
+.Nm
+.Op Fl n
+.Op Fl P Ar path_prefix
+.Op Fl R Ar rpath
+.Ar programs
+.Op ...
+.Sh DESCRIPTION
+The
+.Nm
+utility gathers a list of libraries for an ELF binary, and any further
+libraries requested by that binary recursively. Unlike the 
+.Xr ldd 1
+command from your system's dynamic linker, it can resolve binaries from
+other architectures. (To do so properly may required additional flags, see
+below.)
+.Pp
+The rpath in any binaries are respected, and more can be added in the
+command line arguments.
+.Pp
+The options are as follows:
+.Bl -tag -width indent
+.It Fl n
+Don't recurse, just print the top-level dependencies.
+.It Fl P
+A string to prepend before resolving an rpath. This is useful for chroot
+or foreign architecture binaries, where the proper binaries are somewhere
+else than what a baked-in rpath specifies.
+.It Fl R
+Add an additional rpath entry.
+.El
+.Sh EXIT STATUS
+The
+.Nm
+utility returns the following exit codes:
+.Bl -tag -width ident
+.It 0
+All programs had no issues with handling binaries.
+.It 1
+There was an error parsing the command line arguments.
+.It 2
+Some, but not all binaries had an issue.
+.It 3
+All binaries had issues.
+.El
+.Sh CREDITS
+This manual page and program was written by
+.An Calvin Buckley Aq Mt calvin@cmpct.info .
