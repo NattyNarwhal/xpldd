@@ -5,4 +5,6 @@ AC_PROG_CXX
 dnl This is optional if someone wants to add boost:;fs
 AX_CXX_COMPILE_STDCXX_17()
 
+AC_CHECK_LIB(elf, elf_begin)
+
 AC_OUTPUT([Makefile])
