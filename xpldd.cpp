@@ -1,7 +1,7 @@
 /*
  * xpldd: cross-platform ELF ldd
  *
- * Copyright (C) 2020 Calvin Buckley
+ * Copyright (C) 2020 Calvin Buckley; licensed under the GPLv3
  */
 #include <filesystem>
 #include <iostream>
