@@ -33,10 +33,20 @@ public:
 class XplddState {
 	// who needs getters and setters?
 public:
+	// defaults
+	XplddState() {
+		_prefix = "";
+		_recurse = true;
+		_recurse = true;
+		_tree = false;
+
+		_done = _failed = 0;
+	}
+
 	// configuration passed on args
 	string _prefix;
 	vector<string> _orig_rpath;
-	bool _recurse;
+	bool _recurse, _tree;
 	// stuff we track
 	map<string, Binary*> _found_binaries;
 	int _done, _failed;
@@ -44,8 +54,9 @@ public:
 
 static void usage(string argv0)
 {
-	cerr << "usage: " << argv0 << " [-n] [-P path_prefix] [-R rpath_entry..] [elf..]\n";
+	cerr << "usage: " << argv0 << " [-nt] [-P path_prefix] [-R rpath_entry..] [elf..]\n";
 	cerr << "\t-n: no recursion (optional)\n";
+	cerr << "\t-t: show dependencies in a tree (optional)\n";
 	cerr << "\t-R rpath_entry: add rpath entry (optional, useful if binaries lack them)\n";
 	cerr << "\t-P path_prefix: string to prefix rpaths with before resolution (optional, useful for chroots)\n";
 	cerr << "and takes at least one ELF file to operate on\n";
@@ -118,6 +129,7 @@ static bool process_file(string& file, XplddState& state)
 	vector<string> combined_rpath;
 
 	Binary *binary = new Binary();
+	binary->_name = file;
 
 	if ((fd = open(file.c_str(), O_RDONLY, 0)) == -1) {
 		cerr << "fd open\n";
@@ -171,6 +183,13 @@ static bool process_file(string& file, XplddState& state)
 				continue;
 			}
 			process_file(binary->_depends[i], state);
+		} else {
+			// the binaries won't get added into the list
+			// unless we go into process_file, but since we're
+			// skipping that, add a skeleton
+			Binary* child = new Binary();
+			child->_name = binary->_depends[i];
+			state._found_binaries[binary->_depends[i]] = child;
 		}
 	}
 
@@ -200,13 +219,29 @@ static void print_flat_deps(Binary* binary, XplddState& state)
 	}
 }
 
+static void print_tree_deps(Binary* binary, XplddState& state, int depth)
+{
+	if (depth > 0) {
+		for (int i = 0; i < depth; i++) {
+			cout << "\t";
+		}
+		cout << binary->_name << "\n";
+	}
+	for (auto iter = binary->_depends.begin(); iter != binary->_depends.end(); ++iter) {
+		Binary* next = state._found_binaries[*iter];
+		if (next != nullptr) {
+			print_tree_deps(next, state, depth + 1);
+		}
+	}
+}
+
 int main (int argc, char **argv)
 {
 	XplddState state;
 
 	// args
 	int ch;
-	while ((ch = getopt(argc, argv, "R:P:n")) != -1) {
+	while ((ch = getopt(argc, argv, "R:P:nt")) != -1) {
 		switch (ch) {
 		case 'R':
 			state._orig_rpath.push_back(optarg);
@@ -216,6 +251,9 @@ int main (int argc, char **argv)
 			break;
 		case 'n':
 			state._recurse = false;
+			break;
+		case 't':
+			state._tree = true;
 			break;
 		default:
 			usage(argv[0]);
@@ -241,8 +279,11 @@ int main (int argc, char **argv)
 			cerr << "binary couldn't be resolved\n";
 			continue;
 		}
-		// gather every nested dependency
-		print_flat_deps(binary, state);
+		if (state._tree) {
+			print_tree_deps(binary, state, 0);
+		} else {
+			print_flat_deps(binary, state);
+		}
 	}
 
 	// cleanup

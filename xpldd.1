@@ -6,7 +6,7 @@
 .Nd gather dynamically loaded binaries for an ELF binary
 .Sh SYNOPSIS
 .Nm
-.Op Fl n
+.Op Fl nt
 .Op Fl P Ar path_prefix
 .Op Fl R Ar rpath
 .Ar programs
@@ -33,6 +33,8 @@ The options are as follows:
 .Bl -tag -width indent
 .It Fl n
 Don't recurse, just print the top-level dependencies.
+.It Fl t
+Show the dependencies as a tree, instead of a flat list.
 .It Fl P
 A string to prepend before resolving an rpath. This is useful for chroots
 or foreign architecture binaries, where the proper binaries are somewhere
