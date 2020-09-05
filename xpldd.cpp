@@ -5,6 +5,7 @@
  */
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -19,6 +20,27 @@ extern "C" {
 	#include <libelf.h>
 	#include <gelf.h>
 }
+
+class Binary {
+public:
+	string _name;
+	vector<string> _depends;
+	vector<string> _rpath;
+	//string _interp;
+	bool _resolved;
+};
+
+class XplddState {
+	// who needs getters and setters?
+public:
+	// configuration passed on args
+	string _prefix;
+	vector<string> _orig_rpath;
+	bool _recurse;
+	// stuff we track
+	map<string, Binary*> _found_binaries;
+	int _done, _failed;
+};
 
 static void usage(string argv0)
 {
@@ -46,8 +68,7 @@ static string resolve_symbol(string& name, vector<string>& rpaths, string& prefi
 }
 
 static bool handle_dynamic(Elf *e, Elf_Scn *scn, GElf_Shdr *shdr,
-		vector<string>& unresolved,
-		vector<string>& rpath)
+		Binary* binary)
 {
 	size_t shstrndx;
 	if (elf_getshdrstrndx (e, &shstrndx) < 0) {
@@ -77,25 +98,26 @@ static bool handle_dynamic(Elf *e, Elf_Scn *scn, GElf_Shdr *shdr,
 
 		switch (dyn->d_tag) {
 		case DT_NEEDED:
-			unresolved.push_back(elf_strptr (e, shdr->sh_link, dyn->d_un.d_val));
+			binary->_depends.push_back(elf_strptr (e, shdr->sh_link, dyn->d_un.d_val));
 			break;
 		case DT_RPATH:
-			rpath.push_back(elf_strptr (e, shdr->sh_link, dyn->d_un.d_val));
+			binary->_rpath.push_back(elf_strptr (e, shdr->sh_link, dyn->d_un.d_val));
 			break;
 		}
 	}
 	return true;
 }
 
-static bool process_file(string& file, set<string>& s,
-	       	vector<string>& orig_rpath,
-	       	string& prefix, bool recurse)
+static bool process_file(string& file, XplddState& state)
 {
 	bool failed = false;
 	Elf *e;
 	int fd;
 	Elf_Scn *scn = nullptr;
-	vector<string> unresolved, resolved, rpaths;
+
+	vector<string> combined_rpath;
+
+	Binary *binary = new Binary();
 
 	if ((fd = open(file.c_str(), O_RDONLY, 0)) == -1) {
 		cerr << "fd open\n";
@@ -106,11 +128,6 @@ static bool process_file(string& file, set<string>& s,
 		cerr << "wrong elf kind\n";
 		failed = true;
 		goto err1;
-	}
-
-	// insert all of original rpath
-	for (size_t i = 0; i < orig_rpath.size(); i++) {
-		rpaths.push_back(orig_rpath[i]);
 	}
 
 	// prep, scan
@@ -124,30 +141,36 @@ static bool process_file(string& file, set<string>& s,
 		}
 
 		if (shdr->sh_type == SHT_DYNAMIC) {
-			if (!handle_dynamic(e, scn, shdr, unresolved, rpaths)) {
+			if (!handle_dynamic(e, scn, shdr, binary)) {
 				failed |= true;
 			}
 		}
 	}
 
-	// now resolve it
-	for (size_t i = 0; i < unresolved.size(); i++) {
-		auto sym = resolve_symbol(unresolved[i], rpaths, prefix);
-		resolved.push_back(sym);
+	state._found_binaries[file] = binary;
+
+	// insert all of original rpath plus Binary's (not ideal)
+	for (size_t i = 0; i < state._orig_rpath.size(); i++) {
+		combined_rpath.push_back(state._orig_rpath[i]);
+	}
+	for (size_t i = 0; i < binary->_rpath.size(); i++) {
+		combined_rpath.push_back(binary->_rpath[i]);
 	}
 
-	// then push everything into the set
-	for (size_t i = 0; i < resolved.size(); i++) {
-		s.insert(resolved[i]);
-	}
-
-	// recurse
-	if (recurse) {
-		for (size_t i = 0; i < resolved.size(); i++) {
-			if (resolved[i][0] != '/') {
+	// now resolve it, and recurse as needed
+	for (size_t i = 0; i < binary->_depends.size(); i++) {
+		auto sym = resolve_symbol(binary->_depends[i], combined_rpath, state._prefix);
+		binary->_depends[i] = sym;
+		if (state._recurse) {
+			if (binary->_depends[i][0] != '/') {
+				// we want an absolute path, not an unresolved one
 				continue;
 			}
-			process_file(resolved[i], s, orig_rpath, prefix, true);
+			if (state._found_binaries.count(binary->_depends[i])) {
+				// no need to reprocess a binary we already have
+				continue;
+			}
+			process_file(binary->_depends[i], state);
 		}
 	}
 
@@ -157,26 +180,42 @@ err1:
 	return !failed;
 }
 
+static void gather_flat_deps(set<string>& all_deps, Binary* binary, XplddState& state)
+{
+	for (auto iter = binary->_depends.begin(); iter != binary->_depends.end(); ++iter) {
+		all_deps.insert(*iter);
+		Binary* next = state._found_binaries[*iter];
+		if (next != nullptr) {
+			gather_flat_deps(all_deps, next, state);
+		}
+	}
+}
+
+static void print_flat_deps(Binary* binary, XplddState& state)
+{
+	set<string> all_deps;
+	gather_flat_deps(all_deps, binary, state);
+	for (auto iter = all_deps.begin(); iter != all_deps.end(); ++iter) {
+		cout << "\t" << *iter << "\n";
+	}
+}
+
 int main (int argc, char **argv)
 {
-	vector<string> orig_rpath;
-	string prefix = "";
-	bool recurse = true;
-
-	int failed = 0, done = 0;
+	XplddState state;
 
 	// args
 	int ch;
 	while ((ch = getopt(argc, argv, "R:P:n")) != -1) {
 		switch (ch) {
 		case 'R':
-			orig_rpath.push_back(optarg);
+			state._orig_rpath.push_back(optarg);
 			break;
 		case 'P':
-			prefix = optarg;
+			state._prefix = optarg;
 			break;
 		case 'n':
-			recurse = false;
+			state._recurse = false;
 			break;
 		default:
 			usage(argv[0]);
@@ -190,22 +229,31 @@ int main (int argc, char **argv)
 
 	elf_version (EV_CURRENT);
 	for (int i = optind; i < argc; i++) {
-		done++;
-		set<string> deps;
+		state._done++;
 		string name(argv[i]);
 		cout << name << ":\n";
-		if (!process_file(name, deps, orig_rpath, prefix, recurse)) {
+		if (!process_file(name, state)) {
 			// failure isn't fatal, but it means we had an issue
-			failed++;
+			state._failed++;
 		}
-		for (auto iter = deps.begin(); iter != deps.end(); ++iter) {
-			cout << "\t" << *iter << "\n";
+		Binary* binary = state._found_binaries[name];
+		if (binary == nullptr) {
+			cerr << "binary couldn't be resolved\n";
+			continue;
 		}
+		// gather every nested dependency
+		print_flat_deps(binary, state);
 	}
+
+	// cleanup
+	for (auto iter = state._found_binaries.begin(); iter != state._found_binaries.end(); ++iter) {
+		delete iter->second;
+	}
+
 	// if all failed vs. none
-	if (failed == done) {
+	if (state._failed == state._done) {
 		return 3;
-	} else if (failed) { 
+	} else if (state._failed) {
 		return 2;
 	}
 	return 0;
